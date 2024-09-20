@@ -1,0 +1,781 @@
+---
+title: "DEG Analysis of Post-vs-Pre-Transplant biopsies in Kidney Transplantation"
+author: "Aruna Kumar"
+Supervisor: "Dr. Sujeethraj Koppolu"
+date: "July 8th, 2024"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+    fig_width: 10
+    fig_height: 8
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+# Background
+
+## Introduction
+
+Kidney transplantation is a critical therapeutic option for patients with end-stage renal disease.
+While it significantly improves the quality of life and survival rates, the success of kidney transplants can be hindered by various factors including acute rejection, chronic allograft nephropathy, and other post-transplant complications.
+Therefore, understanding the molecular mechanisms underlying these processes is essential for improving transplant outcomes.
+
+## Objective
+
+This study aims to perform a differential gene expression analysis to identify key genes and pathways involved in the post-transplant response compared to the pre-transplant state.
+By analyzing publicly available datasets, we seek to uncover molecular signatures that could provide insights into the biological processes associated with kidney transplantation and potentially identify biomarkers for transplant success and rejection.
+
+## Datasets
+
+### GSE261240 (Pre-Transplant)
+
+The [GSE261240](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE261240) dataset consists of gene expression profiles of kidney biopsy samples taken from patients before undergoing transplantation.
+This dataset serves as the baseline for our comparative analysis.
+
+-   **Source:** Gene Expression Omnibus (GEO)
+-   **Platform:** [GPL24676](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GPL24676) Illumina NovaSeq 6000 (Homo sapiens)
+-   **Number of Samples:** 136 samples (98 Immediate \| 38 Delayed )
+-   **Sample Type:** Pre-transplant kidney biopsy (renal allograft back table biopsy)
+
+### GSE261892 (Post-Transplant)
+
+The [GSE261892](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE261892) dataset includes gene expression profiles of kidney biopsy samples collected from patients after kidney transplantation.
+This dataset will be compared against the pre-transplant samples to identify differentially expressed genes.
+
+-   **Source:** Gene Expression Omnibus (GEO)
+-   **Platform:** [GPL24676](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GPL24676) Illumina NovaSeq 6000 (Homo sapiens)
+-   **Number of Samples:** 123 samples (88 No_Rejection \| 35 Rejection)
+-   **Sample Type:** Post-transplant kidney biopsy (renal allograft biopsy)
+
+### Loading Required Packages:
+
+This part of the script loads all the necessary R packages that will be used in this project.
+Each package serves a different purpose:
+
+**GEOquery:** Used for downloading and managing data from the Gene Expression Omnibus (GEO).
+
+**DESeq2:** For differential gene expression analysis, particularly useful in RNA-seq data.
+
+**pheatmap:** For creating heatmaps, useful in visualizing data, such as gene expression.
+
+**ggplot2:** A powerful and flexible system for creating visualizations like plots and graphs.
+
+**RColorBrewer:** Provides color palettes that are useful for creating visually appealing graphics.
+
+**biomaRt:** A tool for querying biological databases like Ensembl, allowing you to retrieve data such as gene annotations.
+
+**ggrepel:** For creating plots with text labels that don't overlap, useful for making plots easier to read.
+
+**clusterProfiler:** For performing enrichment analysis and visualizing gene clusters.
+
+**org.Hs.eg.db:** A database for mapping gene IDs to biological information, specifically for humans.
+
+**msigdbr:** For accessing MSigDB, a database of gene sets for use in gene set enrichment analysis (GSEA).
+
+**fgsea:** For fast GSEA analysis.
+
+**stringr:** For manipulating strings in R.
+
+**tibble:** Enhances data frames with better printing and subsetting features.
+
+**dplyr:** Provides functions for data manipulation (e.g., filter(), mutate(), select()).
+
+**tidyverse:** A collection of packages (including dplyr, ggplot2, tibble, etc.) for data science in R.
+
+**tidyr:** Helps tidy your data by reshaping it into the right format.
+
+**UpSetR:** For creating UpSet plots, which are used for visualizing intersections of sets.
+
+**ComplexHeatmap:** For creating complex heatmaps with annotations and hierarchical clustering.
+
+**circlize:** For circular visualizations, often used in genome data analysis.
+
+```{r setup, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all'}
+
+## Load required packages
+library(GEOquery)
+library(DESeq2)
+library(pheatmap)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggrepel)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(msigdbr)
+library(fgsea)
+library(stringr)
+library(tibble)
+library(dplyr)
+invisible(library(tidyverse))
+library(tidyr)
+library(UpSetR)
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(circlize)
+```
+
+## Define Functions
+
+To preprocess our data by removing columns that don’t provide valuable information.
+
+```{r setup, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all'}
+
+filter_unique_columns <- function(df) {
+  unique_value_columns <- sapply(df, function(col) length(unique(col)) > 1)
+  filtered_df <- df[, unique_value_columns]
+  return(filtered_df)
+}
+
+```
+
+## Methodology
+
+### Data Preprocessing
+
+1.  **Data Acquisition:** Download and load the raw data files and the associated metadata from the GEO database for both datasets.
+2.  **Metadata Processing:** Process the metadata to retain only the important information.
+3.  **Mapping gene symbols:** Using the biomart, map the ensembl gene ids to gene symbols (keep only the non-duplicated transcripts with proper gene symbols)
+4.  **Combine the datasets:** Combine the Pre- and Post-transplant datasets for combined analysis
+
+```{r pre_process, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all' }
+
+## Load the GEO dataset
+pre.counts <- read.csv(gzfile(file.path(getwd(),"data","GSE261240_raw_counts.csv.gz")), header = T, row.names = 1)
+post.counts <- read.csv(gzfile(file.path(getwd(),"data","GSE261892_raw_counts.csv.gz")), header = T, row.names = 1)
+print(head(pre.counts))
+head(post.counts)
+head(rownames(pre.metadata))
+head(rownames(post.metadata))
+
+
+```
+
+```{r pre_process, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all' }
+
+## Load the metadata (After cleaning up the downloaded Series Matrix Files)
+pre.metadata <- read.table(file.path(getwd(),"data","GSE261240_series_matrix.txt"), header = T, row.names = 1, sep = "\t")
+post.metadata <- read.table(file.path(getwd(),"data","GSE261892_series_matrix.txt"), header = T, row.names = 1, sep = "\t")
+head(pre.metadata)
+head(post.metadata)
+length(rownames(pre.metadata))  # Check number of original row names
+length(rownames(post.metadata))  # Check number of original row names
+
+```
+
+
+
+```{r pre_process, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all' }
+
+
+
+## Pre-process the metadata
+# Alter the rownames of metadata to match the colnames of counts data
+rownames(pre.metadata) <- sapply(rownames(pre.metadata), 
+                                 function(x){return(str_replace_all(x,"Renal Allograft Biopsy_",""))})
+rownames(post.metadata) <- sapply(post.metadata$Sample_description,
+                                  function(x){return(str_replace_all(x,"processed data column: ",""))})
+nrow(pre.metadata)  # Check the number of rows in pre-transplant metadata
+nrow(post.metadata)  # Check the number of rows in post-transplant metadata
+
+```
+
+
+### Sanity Checks for Gene Names and Metadata
+
+Before proceeding with the analysis, we perform several sanity checks to ensure that the gene names and sample identifiers in our pre- and post-transplant datasets are correctly aligned. Proper alignment of the gene counts and metadata is crucial for the accuracy of downstream analyses
+
+```{r pre_process, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all' }
+
+## Sanity checks for gene names and metadata
+all.equal(rownames(pre.counts), rownames(post.counts))
+all.equal(rownames(pre.metadata), colnames(pre.counts))
+all.equal(rownames(post.metadata), colnames(post.counts))
+
+pre.metadata2 <- filter_unique_columns(pre.metadata)
+post.metadata2 <- filter_unique_columns(post.metadata)
+file.exists(file.path(getwd(), "data", "GSE261240_raw_counts.csv.gz"))
+file.exists(file.path(getwd(), "data", "GSE261892_raw_counts.csv.gz"))
+```
+
+### Data Preprocessing: Mapping Ensembl Gene IDs to HGNC Gene Symbols
+In this section, we pre-process the raw gene expression count data from two datasets (pre-transplant and post-transplant) and map the Ensembl gene IDs to their corresponding HGNC gene symbols using the **biomaRt** package.
+We begin by loading the pre- and post-transplant raw count data from compressed CSV files. The data is loaded with the Ensembl gene IDs as row names, and the samples (columns) contain gene expression values.
+
+
+```{r pre_process, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all' }
+
+pre.counts <- read.csv(gzfile(file.path(getwd(), "data", "GSE261240_raw_counts.csv.gz")), header = T, row.names = 1)
+post.counts <- read.csv(gzfile(file.path(getwd(), "data", "GSE261892_raw_counts.csv.gz")), header = T, row.names = 1)
+## Pre-process the data
+# # Use biomaRt to map Ensembl gene IDs to gene symbols and transcript IDs
+mart <- useDataset("hsapiens_gene_ensembl", useMart("ensembl"))
+# 
+# # Get the mapping of Ensembl IDs to gene symbols and transcript IDs
+genes <- rownames(pre.counts)
+gene_mapping <- getBM(
+filters = "ensembl_gene_id",
+attributes = c("ensembl_gene_id", "hgnc_symbol"),
+values = genes,
+mart = mart, 
+verbose = TRUE )
+# Print the first few rows to check the mapping
+head(gene_mapping)
+
+
+#**Saving the Mapping**: To save time, the gene mapping is saved as an `.rds` file for future use, avoiding repeated querying of the Ensembl database.
+
+saveRDS(gene_mapping, file = file.path(getwd(), "data", "gene_mapping.rds"))
+file.exists(file.path(getwd(), "data", "gene_mapping.rds"))
+gene_mapping <- readRDS(file.path(getwd(),"data","gene_mapping.rds"))
+
+# Merge the counts data with the mapping data
+pre.counts2 <- merge(data.frame(ensembl_gene_id = genes, pre.counts), 
+                     gene_mapping, 
+                     by = "ensembl_gene_id")
+post.counts2 <- merge(data.frame(ensembl_gene_id = genes, post.counts), 
+                      gene_mapping, 
+                      by = "ensembl_gene_id")
+head(pre.counts2)
+head(post.counts2)
+
+```
+
+
+### Removing Duplicates and Setting Gene Symbols as Row Names
+We need to ensure that the dataset is clean and ready for analysis. Specifically, we need to remove any duplicate gene symbols and set the gene symbols as row names in the data frame. This step is crucial for organizing the data by unique genes.
+
+```{r pre_process, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all' }
+
+# Ensure there are no duplicates in gene symbols or transcript IDs
+# Here we keep only the first occurrence for simplicity; we might also think about keeping only the Refseq transcripts
+pre.counts3 <- pre.counts2[!duplicated(pre.counts2$hgnc_symbol), ] %>% 
+  `rownames<-`(NULL) %>% 
+  column_to_rownames("hgnc_symbol")  
+post.counts3 <- post.counts2[!duplicated(post.counts2$hgnc_symbol), ] %>% 
+  `rownames<-`(NULL) %>% 
+  column_to_rownames("hgnc_symbol")  
+```
+
+
+### Final Preprocessing: Dropping Extra Columns and Adding Sample Labels
+
+Before combining the pre- and post-transplant datasets, we perform a few final preprocessing steps to ensure that the data is properly organized and labeled.
+
+#### 1. Dropping Extra Columns
+
+After mapping the Ensembl gene IDs to HGNC gene symbols, the `ensembl_gene_id` column is no longer needed in our datasets. We remove this column from both the pre-transplant and post-transplant datasets to simplify the data
+
+```{r pre_process, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all' }
+
+# Drop the extra columns used for mapping
+pre.counts3$ensembl_gene_id <- NULL
+post.counts3$ensembl_gene_id <- NULL
+
+## Combine the datasets
+# Add the Pre_ and Post_ labels to the patient numbers to avoid confusion
+head(pre.metadata2)
+
+colnames(pre.counts3) <- paste0("Pre_", colnames(pre.counts3))
+colnames(post.counts3) <- paste0("Post_", colnames(post.counts3))
+rownames(pre.metadata2) <- paste0("Pre_", rownames(pre.metadata2))
+rownames(post.metadata2) <- paste0("Post_", rownames(post.metadata2))
+head(pre.counts3)
+head(pre.metadata2)
+
+```
+
+### Cleaning Metadata:
+
+- **Cleaning Condition and Treatment Labels**: Extracts relevant information from the metadata for each sample, removing unnecessary prefixes like `"treatment: "` or `"classification: "`.
+
+``{r pre_process, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all' }
+
+
+# Check column names of pre.metadata2
+colnames(pre.metadata2)
+
+# Check column names of post.metadata2
+colnames(post.metadata2)
+
+# Clean the condition and treatment labels for the pre- and post- transplant samples
+temp1 <- data.frame(GEO_accession = pre.metadata2$X.Sample_geo_accession,
+                    condition = sapply(pre.metadata2$X.Sample_characteristics_ch1.3, function(x){return(str_replace(x,"treatment: ",""))}))
+temp1$treatment <- "Pre_transplant"
+rownames(temp1) <- rownames(pre.metadata2)
+
+temp2 <- data.frame(GEO_accession = post.metadata2$X.Sample_geo_accession,
+                    condition = sapply(post.metadata2$X.Sample_characteristics_ch1.1, function(x){return(str_replace(x,"classification: ",""))}))
+temp2$treatment <- "Post_transplant"
+rownames(temp2) <- rownames(post.metadata2)
+# Remove extra 'Pre_' prefixes and apply only once
+rownames(pre.metadata2) <- paste0("Pre_", gsub("^Pre_", "", rownames(pre.metadata2)))
+rownames(post.metadata2) <- paste0("Post_", gsub("^Post_", "", rownames(post.metadata2)))
+
+colnames(pre.counts3) <- paste0("Pre_", gsub("^Pre_", "", colnames(pre.counts3)))
+colnames(post.counts3) <- paste0("Post_", gsub("^Post_", "", colnames(post.counts3)))
+
+head(temp1)
+head(temp2)
+```
+
+
+```{r pre_process, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all' }
+
+# Remove all occurrences of 'Pre_' and 'Post_' from the names
+rownames(pre.metadata2) <- gsub("Pre_", "", rownames(pre.metadata2))
+rownames(post.metadata2) <- gsub("Post_", "", rownames(post.metadata2))
+
+colnames(pre.counts3) <- gsub("Pre_", "", colnames(pre.counts3))
+colnames(post.counts3) <- gsub("Post_", "", colnames(post.counts3))
+
+# Now apply 'Pre_' and 'Post_' prefixes correctly, but only once
+rownames(pre.metadata2) <- paste0("Pre_", rownames(pre.metadata2))
+rownames(post.metadata2) <- paste0("Post_", rownames(post.metadata2))
+
+colnames(pre.counts3) <- paste0("Pre_", colnames(pre.counts3))
+colnames(post.counts3) <- paste0("Post_", colnames(post.counts3))
+
+# Re-run the condition and treatment labeling with cleaned names
+
+# Clean the condition and treatment labels for the pre- and post-transplant samples
+temp1 <- data.frame(
+  GEO_accession = pre.metadata2$X.Sample_geo_accession,
+  condition = sapply(pre.metadata2$X.Sample_characteristics_ch1.3, function(x){return(str_replace(x, "treatment: ", ""))})
+)
+temp1$treatment <- "Pre_transplant"
+rownames(temp1) <- rownames(pre.metadata2)
+
+temp2 <- data.frame(
+  GEO_accession = post.metadata2$X.Sample_geo_accession,
+  condition = sapply(post.metadata2$X.Sample_characteristics_ch1.1, function(x){return(str_replace(x, "classification: ", ""))})
+)
+temp2$treatment <- "Post_transplant"
+rownames(temp2) <- rownames(post.metadata2)
+
+# Inspect the first few rows of the cleaned temp1 and temp2 data
+head(temp1)
+head(temp2)
+
+
+
+```
+
+### Combining Datasets and Preparing for DESeq2 Analysis
+
+In this section, we combine the **pre-transplant** and **post-transplant** datasets, redefine the conditions and treatments for clarity, and prepare the data for differential expression analysis using the **DESeq2** package.
+
+```{r pre_process, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all' }
+
+# Check for sample name mismatches between metadata and counts
+setdiff(rownames(comb.data$meta), colnames(comb.data$counts))  # Samples in metadata but not in counts
+setdiff(colnames(comb.data$counts), rownames(comb.data$meta))  # Samples in counts but not in metadata
+
+
+# Combine the datasets along with the metadata
+comb.data <- list(counts = cbind(pre.counts3, post.counts3),
+                  meta = rbind(temp1, temp2))
+
+# Redefine the conditions
+comb.data$meta$condition <- recode_factor(comb.data$meta$condition,
+                                          'Immediate' = 'Immediate',
+                                          'Delayed' = 'Delayed',
+                                          'Nill' = 'No_Rejection',
+                                          'Rej' = 'Rejection',
+                                          .ordered = F)
+comb.data$meta$treatment <- factor(comb.data$meta$treatment, levels = c("Pre_transplant","Post_transplant"), ordered = F)
+
+# Sample Check
+all(rownames(pre.metadata) %in% colnames(pre.counts3))
+all(colnames(pre.counts3) %in% rownames(pre.metadata))
+
+## Create a DESeq2 dataset object
+dds <- DESeqDataSetFromMatrix(countData = comb.data$counts, 
+                              colData = comb.data$meta, 
+                              design = ~ treatment)
+
+```
+
+### Exploratory Data Analysis
+
+1.  **Library Size Distribution:** The library size distribution provides insight into the sequencing depth across samples.
+    This is important to ensure that each sample has sufficient reads for accurate quantification and to identify any significant discrepancies in sequencing depth, which could indicate potential issues with sample preparation or sequencing quality.
+
+2.  **Counts per Gene Distribution:** Examining the distribution of counts per gene helps identify genes that are consistently expressed across samples versus those that are rarely expressed.
+    This step is crucial for understanding the overall expression landscape and for filtering out lowly expressed genes that might introduce noise into the analysis.
+
+3.  **Sample-to-Sample Distance Heatmap:** A sample-to-sample distance heatmap visualizes the similarities and differences between samples based on their gene expression profiles.
+    This is important for identifying outliers, batch effects, and potential technical or biological variations that could impact the analysis.
+
+4.  **Principal Component Analysis (PCA):** PCA is a dimensionality reduction technique that helps to visualize the variation in the data by projecting it onto a few principal components.
+    The PCA plot provides a quick overview of the data structure, highlighting clustering patterns, group separations, and potential outliers.
+
+5.  **Top Variable Genes:** A heatmap of the top variable genes highlights the most variably expressed genes across samples.
+    This visualization is important for identifying key genes that contribute to the differences between conditions and for providing a focused view of the most biologically significant changes in the dataset.
+
+```{r EDA_1, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all'}
+
+## Exploratory Data Analysis (EDA)
+# 1. Library size distribution
+librarySizes <- colSums(comb.data$counts)
+hist(librarySizes, main = "Library Sizes", xlab = "Library Size", ylab = "Frequency", col = "skyblue")
+
+# 2. Counts per gene distribution
+geneCounts <- rowSums(comb.data$counts)
+hist(log10(geneCounts + 1), main = "Counts per Gene", xlab = "Log10 Counts", ylab = "Frequency", col = "skyblue")
+
+
+# 3. Sample-to-sample distance heatmap
+rld <- vst(dds, blind = TRUE)  ## Use rlog if N < 50.
+sampleDists <- dist(t(assay(rld)))
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- colnames(dds)
+colnames(sampleDistMatrix) <- colnames(dds)
+pheatmap(sampleDistMatrix, clustering_distance_rows = sampleDists, clustering_distance_cols = sampleDists, main = "Sample-to-Sample Distances", show_rownames = F, show_colnames = F)
+
+```
+
+```{r EDA_2, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all'}
+
+# 4. PCA plot
+pcaData <- plotPCA(rld, intgroup = "treatment", returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+pcaData <- unique(left_join(pcaData, comb.data$meta[,c("condition","treatment")], by = "treatment"))
+
+ggplot(pcaData, aes(PC1, PC2, color = treatment)) +
+  geom_point(size = 3) +
+  labs(title = "PCA Plot", color = "Biopsy Type",
+       x = paste0("PC1: ", percentVar[1], "% variance"),
+       y = paste0("PC2: ", percentVar[2], "% variance")) + 
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = "inside",
+        legend.position.inside = c(0.9,0.1),
+        legend.box.background = element_rect(fill = "white", colour = "black"),
+        legend.title = element_text(face = "bold", hjust = 0.5))
+
+```
+
+The PCA plot shows that many of the pre-transplant and post-transplant samples are close to each other indicating similarity in their gene expression profile.
+However, there are a few samples that seem to separate from the majority of samples, especially post-transplant samples on PC1 and pre-transplant samples on PC2.
+A pathway enrichment of PC1 loadings and PC2 loadings might indicate the source of these separations (Analysis to be followed).
+
+```{r EDA_3, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,results='hide',fig.keep='all'}
+
+# 5. Heatmap of the top 50 variable genes
+topVarGenes <- head(order(rowVars(assay(rld), useNames = TRUE), decreasing = TRUE), 50, useNames = FALSE)
+mat <- assay(rld)[topVarGenes, ]
+mat <- mat - rowMeans(mat)
+pheatmap(mat, scale = "row", name = "z-scores", show_rownames = TRUE, clustering_distance_rows = "correlation", clustering_distance_cols = "correlation", col = colorRampPalette(rev(brewer.pal(9, "RdBu")))(255), main = "Heatmap of Top Variable Genes")
+
+```
+
+The heatmap of the top variable genes clearly shows that the primary source of variation is not explicitly associated with the post-vs-pre transplant gene expression.
+
+\pagebreak
+
+### Differential Expression Analysis (EDA)
+
+Identifying differentially expressed genes (DEGs) is a critical step in understanding the molecular differences between post-transplant and pre-transplant kidney tissues.
+DEGs provide insights into the genes and pathways that are actively regulated in response to biological stimuli or conditions.
+This information can:
+
+-   Reveal the underlying biological mechanisms and processes.
+-   Identify potential biomarkers for diagnosis, prognosis, or treatment response.
+-   Highlight therapeutic targets for drug development.
+
+**DESeq2** is a widely used tool for differential gene expression analysis that offers several advantages:
+
+-   **Normalization:** DESeq2 uses a robust method to normalize read counts, accounting for differences in sequencing depth and RNA composition across samples.
+-   **Statistical Modeling:** It employs a generalized linear model to estimate the variance-mean dependence in count data and tests for differential expression using the Wald test or likelihood ratio test.
+
+```{r DEA, echo = FALSE,warning=FALSE,message=FALSE,error=FALSE,fig.keep='all'}
+
+# Normalize the data and perform QC using DESeq2 functions
+if(file.exists("Kidney_Transplant_DESeq_Object.rds")){
+  dds <- readRDS("Kidney_Transplant_DESeq_Object.rds")
+}else{
+  set.seed(123)
+  dds <- DESeq(dds)
+  saveRDS(dds,"Kidney_Transplant_DESeq_Object.rds")
+}
+normalized_counts <- counts(dds, normalized = TRUE)
+# head(normalized_counts)
+
+#  results
+res <- results(dds, contrast = c("treatment", "Post_transplant", "Pre_transplant"))
+res_df <- as.data.frame(res) %>% arrange(padj)
+
+# # Save the normalized counts to a CSV file
+# write.csv(normalized_counts, file = "normalized_counts.csv")
+
+# Add a color label for volcano plot
+res_df$col.label <- "n.s."
+res_df$col.label[res_df$padj < 0.05 & abs(res_df$log2FoldChange) < 1] <- "small FC"
+res_df$col.label[res_df$padj < 0.05 & res_df$log2FoldChange < -1] <- "downregulated"
+res_df$col.label[res_df$padj < 0.05 & res_df$log2FoldChange > 1] <- "upregulated"
+
+res_df$col.label <- factor(res_df$col.label,
+                           levels = c("n.s.","small FC","downregulated","upregulated"),
+                           ordered = T)
+
+res_df$gene <- rownames(res_df)
+
+## Identify the top genes to label on the volcano plot
+top_upregulated <- res_df %>% 
+  filter(padj < 0.05) %>%
+  arrange(desc(log2FoldChange)) %>% 
+  head(10) %>% 
+  pull(gene)
+
+top_downregulated <- res_df %>% 
+  filter(padj < 0.05) %>%
+  arrange(log2FoldChange) %>% 
+  head(10) %>% 
+  pull(gene)
+
+top_significant <- res_df %>% 
+  arrange(padj) %>% 
+  head(10) %>% 
+  pull(gene)
+
+top_smallFC <- res_df %>% 
+  filter(abs(log2FoldChange) < 1) %>%
+  arrange(padj) %>% 
+  head(10) %>% 
+  pull(gene)
+
+genes_to_show <- c(top_upregulated, top_downregulated,
+                   top_significant, top_smallFC)
+
+# Volcano Plot
+ggplot(res_df) + 
+  aes(x = log2FoldChange, y = -log10(padj), col = col.label, label = gene) + 
+  geom_hline(yintercept = -log10(0.05), lty = 2, col = "darkgray") + 
+  geom_vline(xintercept = c(-1,1), lty = 2, col = "darkgray") + 
+  geom_hline(yintercept = 0, lty = 1, col = "black") + 
+  geom_vline(xintercept = 0, lty = 1, col = "black") + 
+  geom_point(alpha = 0.5) +
+  scale_color_manual(values = c("gray","black","deepskyblue4","tomato4")) + 
+  geom_text_repel(data = res_df %>% filter(gene %in% genes_to_show), 
+                  size = 3, 
+                  box.padding = 0.3, 
+                  point.padding = 0.3,
+                  segment.color = 'grey50', show.legend = F) +
+  labs(x = "log2FC[Post-transplant/Pre-transplant]", y = "-log10(pval)", 
+       title = "Volcano Plot of Differentially Expressed Genes") + 
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+# res_df
+
+```
+
+The volcano plot shows that a majority of the genes are upregulated (N = 2357, red), while a few genes were downregulated (N = 375, blue).
+These upregulated and downregulated genes showed atleast a two-fold change in expression post-transplantation.
+An even higher number of genes showed significant change in gene expression, but that change was less than two-fold post-transplantation (N = 9175, black).
+Most of the genes, though, did not show a significant change in expression (N = 28935, gray).
+The clear dominance of upregulated genes here indicate an active biological response to the transplantation, most likely involving various processes such as tissue repair, immune response, and adaptation to the new environment or even stress response.
+A pathway enrichment analysis might indicate the enrichment of specific pathways among the differentially expressed genes.
+
+\pagebreak
+
+### Pathway Enrichment Analysis
+
+While identifying differentially expressed genes (DEGs) provides valuable insights into specific genes involved in biological processes, it is equally important to understand how these genes function together within pathways.
+Pathway enrichment analysis helps to:
+
+-   **Contextualize DEGs:** It provides a broader biological context by linking DEGs to known biological pathways and processes.
+-   **Identify Key Biological Processes:** Highlighting enriched pathways helps identify key processes that are affected by the condition or treatment under study.
+-   **Uncover Mechanisms:** Understanding the pathways involved can reveal underlying mechanisms and interactions that contribute to the observed phenotype or condition.
+-   **Prioritize Targets:** Enriched pathways can guide the prioritization of potential therapeutic targets and biomarkers.
+
+#### Hallmark Pathways
+
+Hallmark pathways are a collection of curated gene sets that represent well-defined biological states or processes.
+They reduce the complexity of the data and improve interpretability by focusing on core biological processes.
+This curated set is particularly useful for pathway analysis as it provides a comprehensive overview of critical cellular functions and processes.
+
+#### Gene Set Enrichment Analysis (GSEA) using fgsea
+
+Gene Set Enrichment Analysis (GSEA) is a powerful method that considers the entire ranked list of genes, rather than focusing only on DEGs.
+This approach allows for the detection of subtle but coordinated changes in gene expression within pathways.
+The `fgsea` package in R implements an efficient algorithm for GSEA, enabling the analysis of large gene sets quickly and accurately.
+
+\pagebreak
+
+Here is a list of the top 15 hallmark pathways by NES:
+
+```{r path_analysis_1, echo = FALSE, warning=FALSE,message=FALSE,error=FALSE,fig.keep='all'}
+
+# Pathway enrichment analysis using clusterProfiler and Hallmark pathways
+msigdb_hallmark <- msigdbr(species = "Homo sapiens", category = "H")
+hallmark_genes <- split(msigdb_hallmark$entrez_gene, msigdb_hallmark$gs_name)
+
+# Convert the list to a data frame
+hallmark_df <- hallmark_genes %>%
+  enframe(name = "pathway", value = "genes") %>%
+  unnest(cols = c(genes))
+
+# Convert gene symbols to Entrez IDs
+genes <- rownames(res_df)
+entrez_ids <- mapIds(org.Hs.eg.db, keys=genes, column="ENTREZID", keytype="SYMBOL", multiVals="first")
+res_df$ENTREZID <- entrez_ids
+
+# Over-representation analysis
+de_genes <- res_df[res_df$padj < 0.05 & abs(res_df$log2FoldChange) > 1, "ENTREZID"]
+de_genes <- de_genes[!is.na(de_genes)]  # Remove any NA values
+de_genes <- unique(de_genes)  # Remove duplicates
+
+enriched <- enricher(as.numeric(de_genes), TERM2GENE = hallmark_df)
+enrich_results <- as.data.frame(enriched)
+# write.csv(enrich_results, "Enrichment_results_counts.csv")
+
+# GSEA using fgsea
+ranked_genes <- res_df$log2FoldChange
+names(ranked_genes) <- res_df$ENTREZID
+ranked_genes <- ranked_genes[!is.na(names(ranked_genes))]
+ranked_genes <- sort(ranked_genes, decreasing = T)
+fgsea_results <- fgsea(pathways = hallmark_genes, stats = ranked_genes, minSize = 5, maxSize = 500)
+fgsea_results <- fgsea_results[order(fgsea_results$pval), ]
+# write.csv(fgsea_results, "GSEA_results_counts.csv")
+
+# Plot top pathways from GSEA
+top_pathways <- fgsea_results[1:15, ]
+ggplot(top_pathways, aes(reorder(pathway, NES), NES)) +
+  geom_bar(stat="identity") +
+  coord_flip() +
+  labs(title="Top 15 Hallmark Pathways by NES", x="Pathway", y="Normalized Enrichment Score (NES)") + 
+  theme_bw()
+
+```
+
+Here is a list of the NES and adjusted p-values for all the pathways using GSEA (fgsea): \pagebreak
+
+```{r path_analysis_2, echo = FALSE, warning=FALSE,message=FALSE,error=FALSE,fig.keep='all'}
+
+fgsea_results[,c("pathway","NES","padj")]
+
+```
+
+\pagebreak
+
+Looking at the top 5 enriched pathways, there is a concern that the genes involved in Inflammatory Response and Allograft Rejection could be the same.
+Similarly, genes involved in Myogenesis and EMT might be the same.
+So, we can look at the shared DEGs between these enriched pathways using an Upset Plot:
+
+```{r path_analysis_3, echo = FALSE, warning=FALSE,message=FALSE,error=FALSE,fig.keep='all'}
+
+# Select specific Hallmark pathways for the analysis
+selected_pathways <- c("HALLMARK_MYOGENESIS","HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION",
+                       "HALLMARK_ALLOGRAFT_REJECTION","HALLMARK_INFLAMMATORY_RESPONSE", "HALLMARK_APICAL_JUNCTION")
+
+# Filter the Hallmark pathways to include only the selected ones
+filtered_pathways <- hallmark_genes[selected_pathways]
+
+# Create a binary matrix indicating the presence or absence of genes in each pathway
+gene_list <- intersect(unique(unlist(filtered_pathways)), res_df$ENTREZID[res_df$padj < 0.05])
+binary_matrix <- sapply(filtered_pathways, function(pathway) gene_list %in% pathway)
+colnames(binary_matrix) <- selected_pathways
+binary_matrix <- data.frame(as.matrix(binary_matrix))
+
+binary_matrix <- binary_matrix %>%
+  mutate(across(everything(), as.integer))
+
+binary_matrix$Gene <- gene_list
+
+# Generate the UpSet plot
+upset(binary_matrix, sets = selected_pathways, sets.bar.color = "black", order.by = "freq",
+      main.bar.color = "#0072B2", matrix.color = "#D55E00", text.scale = 1)
+
+
+```
+
+\pagebreak
+
+Now that we know that majority of the genes are not shared between these pathways, let's take a look at the heatmap of the gene expression for the genes in these 5 pathways, annotated by the pathways name across rows, and the condition and treatment across the columns:
+
+```{r path_analysis_4, echo = FALSE, warning=FALSE,message=FALSE,error=FALSE,fig.keep='all', fig.height = 18, fig.width = 14}
+
+gene_list2 <- intersect(unique(unlist(filtered_pathways)), 
+                        res_df$ENTREZID[res_df$padj < 0.05 & abs(res_df$log2FoldChange) > 1])
+expr_data_subset <- normalized_counts[rownames(normalized_counts) %in% res_df$gene[res_df$ENTREZID %in% gene_list2], ]
+
+rowAnnot_df <- data.frame(gene = rownames(expr_data_subset))
+rowAnnot_df$pathway <- NA
+rowAnnot_df$pathway[rowAnnot_df$gene %in% res_df$gene[res_df$ENTREZID %in% hallmark_genes$HALLMARK_MYOGENESIS]] <- "HALLMARK_MYOGENESIS"
+rowAnnot_df$pathway[rowAnnot_df$gene %in% res_df$gene[res_df$ENTREZID %in% hallmark_genes$HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION]] <- "HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION"
+rowAnnot_df$pathway[rowAnnot_df$gene %in% res_df$gene[res_df$ENTREZID %in% hallmark_genes$HALLMARK_ALLOGRAFT_REJECTION]] <- "HALLMARK_ALLOGRAFT_REJECTION"
+rowAnnot_df$pathway[rowAnnot_df$gene %in% res_df$gene[res_df$ENTREZID %in% hallmark_genes$HALLMARK_INFLAMMATORY_RESPONSE]] <- "HALLMARK_INFLAMMATORY_RESPONSE"
+rowAnnot_df$pathway[rowAnnot_df$gene %in% res_df$gene[res_df$ENTREZID %in% hallmark_genes$HALLMARK_APICAL_JUNCTION]] <- "HALLMARK_APICAL_JUNCTION"
+
+colAnnot_df <- comb.data$meta
+colAnnot_df$treatment <- factor(colAnnot_df$treatment,
+                                levels = c("Pre_transplant","Post_transplant"),
+                                ordered = T)
+
+set.seed(369)
+rowAnnot <- rowAnnotation(pathway = rowAnnot_df$pathway)
+colAnnot <- HeatmapAnnotation(condition = colAnnot_df$condition,
+                              treatment = colAnnot_df$treatment,
+                              col = list(condition = c('Immediate' = "lightblue",
+                                                       'Delayed' = "royalblue4",
+                                                       'No_Rejection' = "rosybrown1",
+                                                       'Rejection' = "indianred2"),
+                                         treatment = c('Pre_transplant' = "gray",
+                                                       'Post_transplant' = "olivedrab2")))
+
+# Calculate z-scores for each gene
+z_scores <- t(apply(expr_data_subset, 1, scale))
+
+
+col_hmap <- colorRamp2(c(-2,0,4), c("blue","white","red"))
+hmap <- Heatmap(z_scores, 
+        name = "z-scores",
+        col = col_hmap,
+        column_split = colAnnot_df$treatment,
+        row_split = rowAnnot_df$pathway,
+        show_row_names = TRUE,
+        show_column_names = FALSE,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        left_annotation = rowAnnot,
+        top_annotation = colAnnot,
+        row_title = "Genes",
+        column_title = "Samples",
+        row_names_gp = gpar(fontsize = 4, fontface = "bold"))
+
+
+draw(hmap, merge_legends = TRUE, heatmap_legend_side = "bottom")
+
+```
+
+\pagebreak
+
+## Potential Ideas for Next Steps:
+
+This analysis is only a preliminary analysis of the datasets to look for post-transplant vs pre-transplant gene expression.
+Given that we have more information in the metadata, here is a list of few things that can be considered for further analysis:
+
+1.  **Post_transplant (Rejection) vs Pre-transplant:** The idea is to look for gene changes specific to the rejected kidney transplants.
+
+2.  **Post_transplant (No_Rejection) vs Pre-transplant:** The idea is to look for gene changes specific to the not rejected kidney transplants.
+
+3.  **Post_transplant (Rejection) vs Post_transplant (No_Rejection):** To look for rejection specific changes in the post-transplant dataset only
+
+4.  **Pathway enrichment of PCA loadings:** To look for pathways leading to the diversity across the patient samples.
+
+5.  **Enrichment of KEGG/Immunologic Pathways:** To identify specific biomarkers or target molecules in the rejection-specific post_transplant cohort.
+
+\pagebreak
+
+Here is a list of all the differentially expressed genes:
+
+```{r deg_list,  echo = FALSE, warning=FALSE,message=FALSE,error=FALSE,fig.keep='all'}
+
+res_df[,c("ENTREZID","log2FoldChange","pvalue","padj","col.label")]
+
+```
